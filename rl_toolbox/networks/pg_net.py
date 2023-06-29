@@ -1,3 +1,5 @@
+import numpy as np
+
 import torch
 from torch import nn
 from torch.distributions.categorical import Categorical
@@ -48,13 +50,13 @@ class GuassianActor(Actor):
 
         sizes = [obs_space_size] + list(hidden_sizes) + [action_space_size]
         self.mu_net = mlp(sizes, activation, nn.Identity)
-        self.sigmas = nn.Parameter(
-            init_sigma * torch.ones(action_space_size, dtype=torch.float32)
+        self.log_sigmas = nn.Parameter(
+            np.log(init_sigma) * torch.ones(action_space_size, dtype=torch.float32)
         )
 
     def get_policy(self, obs):
         mus = self.mu_net(obs)
-        return Normal(mus, self.sigmas)
+        return Normal(mus, self.log_sigmas.exp())
 
     def log_prob_from_policy(self, policy, action):
         return policy.log_prob(action).sum(axis=-1)
