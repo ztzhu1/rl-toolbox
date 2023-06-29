@@ -14,8 +14,8 @@ device = get_device()
 
 
 class A2CAgent(Agent):
-    def __init__(self, model_name, env=None, args_in_name=None, **config) -> None:
-        super().__init__(model_name, env, args_in_name, **config)
+    def __init__(self, model_dir, env=None, args_in_name=None, **config) -> None:
+        super().__init__(model_dir, env, args_in_name, **config)
         self.params_to_save += [
             "ac",
             "opt_actor",

@@ -23,8 +23,8 @@ device = get_device()
 
 
 class Agent(ABC):
-    def __init__(self, model_name, env=None, args_in_name=None, **config) -> None:
-        self.model_name = model_name
+    def __init__(self, model_dir, env=None, args_in_name=None, **config) -> None:
+        self.model_dir = model_dir
         self.args_in_name = args_in_name
         config["env"] = env
         self.config = config
@@ -34,7 +34,7 @@ class Agent(ABC):
         self.overwrite_default_config()
         self.set_default_config()
         self.set_default_extra_config()
-        if model_name is not None:
+        if model_dir is not None:
             self.check_config_keys()
             print("env: %s" % self.config["env"])
 
@@ -144,7 +144,7 @@ class Agent(ABC):
         names = self.params_to_save
         params_to_save = {name: getattr(self, name) for name in names}
         save_model(
-            self.model_name,
+            self.model_dir,
             self.curr_epoch,
             self.config,
             self.args_in_name,
