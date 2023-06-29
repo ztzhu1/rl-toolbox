@@ -3,7 +3,7 @@ import numpy as np
 from torch import nn
 from torch.optim import Adam
 
-from rl_toolbox.buffers.replay_buffer import ReplayBuffer
+from rl_toolbox.buffers import ReplayBuffer
 from rl_toolbox.networks.qnet import DuelingQNet, SimpleQNet
 from rl_toolbox.utils.backend import get_device
 from rl_toolbox.utils.network_utils import as_tensor32, freeze_grad, update_target_net

@@ -3,7 +3,7 @@ import numpy as np
 from torch import nn
 from torch.optim import Adam
 
-from rl_toolbox.buffers.pg_buffer import PGBuffer
+from rl_toolbox.buffers import PGBuffer
 from rl_toolbox.networks.pg_net import ActorCritic
 from rl_toolbox.utils.backend import get_device
 from rl_toolbox.utils.network_utils import as_tensor32, freeze_grad, unfreeze_grad
