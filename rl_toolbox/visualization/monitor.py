@@ -5,7 +5,7 @@ import matplotlib as mpl
 from matplotlib.axes._axes import Axes
 import numpy as np
 
-from utils import check_notebook
+from rl_toolbox.utils.backend import check_notebook
 
 in_notebook = check_notebook()
 if in_notebook:

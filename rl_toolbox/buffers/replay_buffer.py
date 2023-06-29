@@ -3,7 +3,7 @@ from numpy_ringbuffer import RingBuffer
 
 import torch
 
-from utils import as_tensor32
+from rl_toolbox.utils.network_utils import as_tensor32
 
 
 class ReplayBuffer:
