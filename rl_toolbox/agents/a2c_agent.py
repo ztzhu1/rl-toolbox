@@ -138,7 +138,7 @@ class A2CAgent(Agent):
         cfg.setdefault("lr_actor", 0.0004)
         cfg.setdefault("lr_critic", 0.001)
 
-        cfg.setdefault("lam", 0.98)
+        cfg.setdefault("lam", 0.95)
 
         cfg.setdefault("steps_per_epoch", cfg["max_steps_per_traj"] * 5)
 
