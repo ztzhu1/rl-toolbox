@@ -91,6 +91,8 @@ def test_model(model_dir, epochs=None, run_times=10, **env_config):
             render_mode="human",
             **config["env_config"],
         )
+    else:
+        env.unwrapped.render_mode = "human"
 
     obs_space_size = env.observation_space.shape[0]
 
@@ -102,7 +104,7 @@ def test_model(model_dir, epochs=None, run_times=10, **env_config):
     model = data["__class__"].get_model(obs_space_size, action_space_size, config, data)
 
     for _ in trange(run_times):
-        obs, _ = env.reset()
+        obs, info = env.reset()
         done = False
         while not done:
             if keyboard.is_pressed("Esc"):
@@ -110,7 +112,8 @@ def test_model(model_dir, epochs=None, run_times=10, **env_config):
             action = model.select_action(as_tensor32(obs).to(device))
             if isinstance(action, tuple):
                 action = action[0]
-            obs, _, terminated, truncated, _ = env.step(action)
+            obs, _, terminated, truncated, info = env.step(action)
             done = terminated or truncated
 
     # env.close()
+    return info
