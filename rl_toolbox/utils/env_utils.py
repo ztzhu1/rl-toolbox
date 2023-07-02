@@ -13,7 +13,7 @@ def make_env(
     device=None,
     **env_cfg
 ):
-    env = GymEnv(env_name, **env_cfg)
+    env = GymEnv(env_name, frame_skip=1, **env_cfg)
     env = TransformedEnv(
         env,
         Compose(
@@ -46,4 +46,8 @@ def init_env(env, init_stats_param: Optional[Union[int, OrderedDict]] = 1000):
             t.init_stats(num_iter=init_stats_param)
     else:
         assert isinstance(init_stats_param, OrderedDict)
-        t.load_state_dict(init_stats_param)
+        t.register_buffer(
+            "standard_normal", init_stats_param["transforms.0.standard_normal"]
+        )
+        t.register_buffer("loc", init_stats_param["transforms.0.loc"])
+        t.register_buffer("scale", init_stats_param["transforms.0.scale"])
