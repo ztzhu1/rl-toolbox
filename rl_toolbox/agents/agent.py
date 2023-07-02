@@ -12,7 +12,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from rl_toolbox.utils.backend import check_notebook, get_device
-from rl_toolbox.utils.model_utils import save_model
+from rl_toolbox.utils.model_utils import save_checkpoint
 from rl_toolbox.visualization.monitor import plot_value
 
 in_notebook = check_notebook()
@@ -59,7 +59,7 @@ class Agent(ABC):
             self.update_vis()
 
             if self.needs_to_save():
-                self.save_model()
+                self.save_checkpoint()
 
     @abstractmethod
     def one_epoch(self) -> dict:
@@ -140,10 +140,10 @@ class Agent(ABC):
 
         self.log = self.log.append(log, ignore_index=True)
 
-    def save_model(self):
+    def save_checkpoint(self):
         names = self.params_to_save
         params_to_save = {name: getattr(self, name) for name in names}
-        save_model(
+        save_checkpoint(
             self.model_dir,
             self.curr_epoch,
             self.config,

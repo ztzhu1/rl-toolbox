@@ -12,7 +12,6 @@ import gymnasium as gym
 import torch
 from torch import nn
 from torch.optim import Optimizer
-import safetensors # TODO
 
 from .backend import get_device
 from .network_utils import as_tensor32
