@@ -65,6 +65,8 @@ def save_checkpoint(cp_dir, epochs, config, args_in_name=None, **params_to_save)
 
 def load_checkpoint(cp_dir, epochs=None, device=None):
     filename = search_cp_file_name(cp_dir, epochs)
+    if filename is None:
+        raise FileNotFoundError(f"Cannont find {filename}!")
     if device is not None:
         device = torch.device(device)
     data = torch.load(filename, map_location=device)
