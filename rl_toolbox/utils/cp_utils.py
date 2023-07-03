@@ -84,11 +84,18 @@ def test_checkpoint(cp_dir, epochs=None, run_epochs=10, **env_kwargs):
     cfg["epochs"] = run_epochs * cfg["steps_per_epoch"]
     cfg["steps_per_epoch"] = 1
     cfg["init_stats_param"] = model._env.state_dict()
+    if cfg["max_steps_per_traj"] < 0:
+        cfg["max_steps_per_traj"] = 1000
 
     model._init_env()
     model._init_collector()
 
-    for _ in model._collector:
+    for data in model._collector:
+        if data["next"]["done"] or data["next"]["truncated"]:
+            print(
+                f"step_count: %d, traj_reward: %lf"
+                % (data["next"]["step_count"].cpu().item(), data["episode_reward"].cpu().item())
+            )
         if keyboard.is_pressed("Esc"):
             break
     plt.close(model._fig)
