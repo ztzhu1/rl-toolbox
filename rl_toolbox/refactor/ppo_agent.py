@@ -1,4 +1,3 @@
-from copy import deepcopy
 import os
 import pathlib
 
@@ -27,6 +26,7 @@ from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
 
 from rl_toolbox.utils.backend import check_notebook, get_device
+from rl_toolbox.utils.cp_utils import load_checkpoint
 from rl_toolbox.utils.env_utils import make_env
 from rl_toolbox.utils.network_utils import mlp
 from rl_toolbox.visualization.monitor import plot_value
@@ -40,15 +40,15 @@ device = get_device()
 
 class PPOAgent:
     def __init__(self, cp_dir=None, env_name="LunarLander-v2", **cfg) -> None:
-        self.initialized = False
-
+        self._curr_epoch = 0
         self._cp_dir = cp_dir
         self._env_name = env_name
         self._cfg = cfg
+        self._set_dflt_cfg()
+        self._set_ppo_dflt_cfg()
         self._vis_value_names = [
-            "loss_actor",
-            "loss_critic",
-            "avg_return",
+            "loss",
+            "episode_reward",
             "kl_div",
             "avg_frame",
         ]
@@ -56,8 +56,9 @@ class PPOAgent:
     def learn(self):
         self._init_all()
 
-        pbar = tqdm(total=self._cfg["epochs"])
-        for epoch, data in enumerate(self._collector, 1):
+        pbar = tqdm(total=self._cfg["epochs"] - self._curr_epoch)
+        start_epoch = self._curr_epoch
+        for epoch, data in enumerate(self._collector, 1 + start_epoch):
             self._curr_epoch = epoch
 
             log = self.one_epoch(data)
@@ -70,84 +71,60 @@ class PPOAgent:
             pbar.update()
 
     def one_epoch(self, data):
+        """
+        refer to
+        - https://github.com/openai/baselines/blob/master/baselines/ppo2/ppo2.py
+        - https://stable-baselines3.readthedocs.io/en/master/_modules/stable_baselines3/ppo/ppo.html
+        - https://pytorch.org/rl/tutorials/coding_ppo.html
+        """
         cfg = self._cfg
         clip_grad_norm = cfg["clip_grad_norm"]
+        batch_size = cfg["batch_size"]
+        steps_per_epoch = cfg["steps_per_epoch"]
 
         with torch.no_grad():
-            data = self._compute_advs(data)
+            self._adv_module(data)
 
-        # opt actor
-        losses_actor = []
-        kl_divs = []
+        losses = []
         old_dist = self._actor.build_dist_from_params(data)
-        for _ in range(cfg["epochs_actor"]):
-            self._opt_actor.zero_grad()
+        for _ in range(cfg["opt_epochs"]):
+            indexes = torch.randperm(steps_per_epoch, device=data.device)
+            for i in range(0, steps_per_epoch, batch_size):
+                batch_data = data[indexes[i : i + batch_size]].clone()
+                loc = batch_data["advantage"].mean().item()
+                scale = batch_data["advantage"].std().clamp_min(1e-6).item()
+                batch_data["advantage"] = (batch_data["advantage"] - loc) / scale
 
-            loss = self._loss_module(data)
-            loss_actor = loss["loss_objective"] + loss["loss_entropy"]
+                self._opt.zero_grad()
+                loss_vals = self._loss_module(batch_data)
+                loss = (
+                    loss_vals["loss_objective"]
+                    + loss_vals["loss_critic"]
+                    + loss_vals["loss_entropy"]
+                )
+                loss.backward()
+                if clip_grad_norm is not None:
+                    nn.utils.clip_grad_norm_(self._actor.parameters(), clip_grad_norm)
+                    nn.utils.clip_grad_norm_(self._critic.parameters(), clip_grad_norm)
+                self._opt.step()
 
-            loss_actor.backward()
+                losses.append(loss.detach().cpu().item())
 
-            if clip_grad_norm is not None:
-                nn.utils.clip_grad_norm_(self._actor.parameters(), clip_grad_norm)
-            self._opt_actor.step()
-
-            losses_actor.append(loss_actor.detach().cpu().item())
-            curr_dist = self._actor.get_dist(
-                data, params=self._loss_module.actor_params
-            )
-            kl_divs.append(
-                kl_divergence(old_dist, curr_dist).mean().detach().cpu().item()
-            )
-
-        # opt critic
-        losses_critic = []
-        for _ in range(cfg["epochs_critic"]):
-            self._opt_critic.zero_grad()
-
-            v = self._critic(data)["state_value"]
-            loss_critic = cfg["criterion"](v, data["value_target"])
-
-            loss_critic.backward()
-            if clip_grad_norm is not None:
-                nn.utils.clip_grad_norm_(self._critic.parameters(), clip_grad_norm)
-            self._opt_critic.step()
-
-            losses_critic.append(loss_critic.detach().cpu().item())
+        curr_dist = self._actor.get_dist(data, params=self._loss_module.actor_params)
+        kl_div = kl_divergence(old_dist, curr_dist).mean().detach().cpu().item()
 
         log = dict()
-        log["loss_actor"] = np.mean(losses_actor)
-        log["loss_critic"] = np.mean(losses_critic)
-        log["avg_return"] = data.get(("next", "reward")).mean().detach().cpu().item()
-        log["kl_div"] = np.mean(kl_divs)
+        log["loss"] = np.mean(losses)
+        log["episode_reward"] = (
+            data.get(("next", "episode_reward"))[-1].detach().cpu().item()
+        )
+        log["kl_div"] = kl_div
         num_trajs = len(torch.where(data["step_count"] == 0)[0])
         num_trajs = np.max([num_trajs, 1])
         log["avg_frame"] = cfg["steps_per_epoch"] / num_trajs
         return log
 
-    def _compute_advs(self, data: TensorDict):
-        assert data.batch_dims == 2
-        for tid in range(data.batch_size[0]):  # `tid` is trajectory id
-            mask = data[tid].get(("collector", "mask"))
-            traj_data = data[tid].masked_select(mask)
-            traj_data = self._adv_module(traj_data)
-
-            loc = traj_data["advantage"].mean()
-            scale = traj_data["advantage"].std().clamp_min(1e-4)
-            traj_data["advantage"] = (traj_data["advantage"] - loc) / scale
-
-            data[tid, : len(traj_data)] = traj_data
-
-        mask = data.get(("collector", "mask"))
-        return data.masked_select(mask)
-
     def _init_all(self):
-        if self.initialized:
-            raise RuntimeError("Cannot re-initialize agent!")
-        else:
-            self.initialized = True
-
-        self._init_dflt_cfg()
         self._init_env()
         self._init_actor()
         self._init_critic()
@@ -157,16 +134,12 @@ class PPOAgent:
         self._init_collector()
         self._init_vis()
 
-    def _init_dflt_cfg(self):
-        self._set_dflt_cfg()
-        self._set_ppo_dflt_cfg()
-
     def _init_env(self):
         cfg = self._cfg
         self._env = make_env(
             self._env_name,
             cfg["init_stats_param"],
-            cfg["seed"],
+            seed=cfg["seed"],
             device=device,
             **cfg["env_kwargs"],
         )
@@ -193,6 +166,14 @@ class PPOAgent:
         sizes = [obs_dim] + cfg["hidden_sizes"] + [out_dim_factor * act_dim]
 
         actor = mlp(sizes, cfg["activation"], out_layer)
+        # init actor network parameters
+        for i in range(0, len(actor), 2):
+            nn.init.zeros_(actor[i].bias)
+            if i < len(actor) - 2:
+                nn.init.orthogonal_(actor[i].weight, np.sqrt(2))
+            else:
+                nn.init.orthogonal_(actor[i].weight, 0.01)
+        # make actor a TensorDictModule
         actor = TensorDictModule(
             actor, in_keys=["observation"], out_keys=actor_out_keys
         )
@@ -225,14 +206,26 @@ class PPOAgent:
         sizes = [obs_dim] + cfg["hidden_sizes"] + [1]
 
         critic = mlp(sizes)
+        # init critic network parameters
+        for i in range(0, len(critic), 2):
+            nn.init.zeros_(critic[i].bias)
+            if i < len(critic) - 2:
+                nn.init.orthogonal_(critic[i].weight, np.sqrt(2))
+            else:
+                nn.init.orthogonal_(critic[i].weight, 1)
+        # make critic a TensorDictModule
         critic = ValueOperator(critic, in_keys=["observation"])
 
         self._critic = critic
 
     def _init_opt(self):
         cfg = self._cfg
-        self._opt_actor = Adam(self._actor.parameters(), lr=cfg["lr_actor"])
-        self._opt_critic = Adam(self._actor.parameters(), lr=cfg["lr_critic"])
+        self._opt = Adam(
+            [
+                {"params": self._actor.parameters(), "lr": cfg["lr_actor"]},
+                {"params": self._critic.parameters(), "lr": cfg["lr_critic"]},
+            ]
+        )
         # TODO (ztzhu): use lr_scheduler
 
     def _init_adv_module(self):
@@ -241,7 +234,7 @@ class PPOAgent:
             gamma=cfg["gamma"],
             lmbda=cfg["lam"],
             value_network=self._critic,
-            average_gae=False,
+            average_gae=True,
         )
 
     def _init_loss_module(self):
@@ -252,7 +245,8 @@ class PPOAgent:
             clip_epsilon=cfg["clip_ratio_eps"],
             entropy_bonus=True,
             entropy_coef=cfg["entropy_coef"],
-            critic_coef=0.0,
+            loss_critic_type=cfg["criterion"],
+            normalize_advantage=False,  # we will normalize it at each minibatch
         )
 
     def _init_collector(self):
@@ -263,7 +257,6 @@ class PPOAgent:
             frames_per_batch=cfg["steps_per_epoch"],
             total_frames=cfg["steps_per_epoch"] * cfg["epochs"],
             max_frames_per_traj=cfg["max_steps_per_traj"],
-            split_trajs=True,
         )
 
     def _init_vis(self):
@@ -271,6 +264,8 @@ class PPOAgent:
             return
 
         n = len(self._vis_value_names)
+        if hasattr(self, "_fig"):
+            plt.close(self._fig)
         fig = plt.figure(figsize=[5.5 * n, 4])
         self._fig = fig
         self._axes = dict()
@@ -323,23 +318,22 @@ class PPOAgent:
 
         self._cfg.setdefault("seed", 56)
 
-        self._cfg.setdefault("epochs", 600)
-        self._cfg.setdefault("save_cp_freq", 50)
+        self._cfg.setdefault("epochs", 100)
+        self._cfg.setdefault("save_cp_freq", 2)
 
-        self._cfg.setdefault("hidden_sizes", [128, 128])
+        self._cfg.setdefault("hidden_sizes", [256, 256])
         self._cfg.setdefault("activation", nn.Tanh)
 
         self._cfg.setdefault("gamma", 0.99)
-        self._cfg.setdefault("criterion", F.mse_loss)
+        self._cfg.setdefault("criterion", "l2")
         self._cfg.setdefault("clip_grad_norm", 1.0)
 
         self._cfg.setdefault("init_stats_param", 1000)
-        self._cfg.setdefault("max_steps_per_traj", 1000)
+        self._cfg.setdefault("max_steps_per_traj", -1)
         self._cfg.setdefault("env_kwargs", dict())
 
     def _set_ppo_dflt_cfg(self):
-        self._cfg.setdefault("epochs_actor", 80)
-        self._cfg.setdefault("epochs_critic", 80)
+        self._cfg.setdefault("opt_epochs", 20)
 
         self._cfg.setdefault("lr_actor", 0.0004)
         self._cfg.setdefault("lr_critic", 0.001)
@@ -348,4 +342,12 @@ class PPOAgent:
         self._cfg.setdefault("clip_ratio_eps", 0.2)
         self._cfg.setdefault("entropy_coef", 0.01)
 
-        self._cfg.setdefault("steps_per_epoch", 5000)
+        self._cfg.setdefault("batch_size", 64)
+        self._cfg.setdefault("steps_per_epoch", 8192)
+
+        num_batch = int(self._cfg["steps_per_epoch"] // self._cfg["batch_size"])
+        self._cfg["num_batch"] = num_batch
+        steps_per_epoch = num_batch * self._cfg["batch_size"]
+        if steps_per_epoch != self._cfg["steps_per_epoch"]:
+            print(f"Warning: `steps_per_epoch` is truncated to {steps_per_epoch}!")
+            self._cfg["steps_per_epoch"] = steps_per_epoch
