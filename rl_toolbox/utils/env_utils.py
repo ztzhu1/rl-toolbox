@@ -1,7 +1,13 @@
 from collections import OrderedDict
 from typing import Optional, Union
 
-from torchrl.envs import Compose, DoubleToFloat, ObservationNorm, TransformedEnv
+from torchrl.envs import (
+    Compose,
+    ObservationNorm,
+    RewardSum,
+    StepCounter,
+    TransformedEnv,
+)
 from torchrl.envs.libs.gym import GymEnv
 from torchrl.envs.utils import check_env_specs
 
@@ -18,7 +24,8 @@ def make_env(
         env,
         Compose(
             ObservationNorm(in_keys=["observation"], standard_normal=True),
-            DoubleToFloat(in_keys=["observation"]),
+            RewardSum(),
+            StepCounter(),
         ),
         device=device,
     )
