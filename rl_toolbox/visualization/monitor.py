@@ -39,6 +39,7 @@ def plot_value(ax: Axes, epoch: int, values: Iterable, value_name=None, handle=N
     if value_name is not None:
         ax.set_ylabel(value_name)
     if not in_notebook:
+        plt.tight_layout()
         plt.pause(0.001)
     else:
         if handle is not None:
