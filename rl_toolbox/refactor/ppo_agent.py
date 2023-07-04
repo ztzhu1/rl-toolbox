@@ -1,6 +1,8 @@
+import json
 import os
 import pathlib
 
+import keyboard
 from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
@@ -26,7 +28,7 @@ from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
 
 from rl_toolbox.utils.backend import check_notebook, get_device
-from rl_toolbox.utils.cp_utils import load_checkpoint
+from rl_toolbox.utils.cp_utils import load_checkpoint, search_cp_file_name
 from rl_toolbox.utils.env_utils import make_env
 from rl_toolbox.utils.network_utils import mlp
 from rl_toolbox.visualization.monitor import plot_value
@@ -39,13 +41,23 @@ device = get_device()
 
 
 class PPOAgent:
+    """
+    refer to
+    - https://github.com/openai/baselines/blob/master/baselines/ppo2/ppo2.py
+    - https://stable-baselines3.readthedocs.io/en/master/_modules/stable_baselines3/ppo/ppo.html
+    - https://pytorch.org/rl/tutorials/coding_ppo.html
+    - https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/
+    """
+
     def __init__(self, cp_dir=None, env_name="LunarLander-v2", **cfg) -> None:
-        self._curr_epoch = 0
+        if cp_dir is not None and os.path.exists(cp_dir):
+            raise FileExistsError(f"Directory {cp_dir} already exists!")
         self._cp_dir = cp_dir
         self._env_name = env_name
-        self._cfg = cfg
-        self._set_dflt_cfg()
-        self._set_ppo_dflt_cfg()
+        self._cfg = self._get_dflt_cfg()
+        self._update_cfg(cfg)
+
+        self._curr_epoch = 0
         self._vis_value_names = [
             "loss",
             "episode_reward",
@@ -71,12 +83,6 @@ class PPOAgent:
             pbar.update()
 
     def one_epoch(self, data):
-        """
-        refer to
-        - https://github.com/openai/baselines/blob/master/baselines/ppo2/ppo2.py
-        - https://stable-baselines3.readthedocs.io/en/master/_modules/stable_baselines3/ppo/ppo.html
-        - https://pytorch.org/rl/tutorials/coding_ppo.html
-        """
         cfg = self._cfg
         clip_grad_norm = cfg["clip_grad_norm"]
         batch_size = cfg["batch_size"]
@@ -143,6 +149,7 @@ class PPOAgent:
             device=device,
             **cfg["env_kwargs"],
         )
+
         if isinstance(self._env.action_spec.space, DiscreteBox):
             self._cont_act = False
         else:
@@ -165,7 +172,7 @@ class PPOAgent:
         act_dim = self._env.action_spec.shape[0]
         sizes = [obs_dim] + cfg["hidden_sizes"] + [out_dim_factor * act_dim]
 
-        actor = mlp(sizes, cfg["activation"], out_layer)
+        actor = mlp(sizes, getattr(nn, cfg["activation"]), out_layer)
         # init actor network parameters
         for i in range(0, len(actor), 2):
             nn.init.zeros_(actor[i].bias)
@@ -205,7 +212,7 @@ class PPOAgent:
         obs_dim = self._env.observation_spec["observation"].shape[0]
         sizes = [obs_dim] + cfg["hidden_sizes"] + [1]
 
-        critic = mlp(sizes)
+        critic = mlp(sizes, getattr(nn, cfg["activation"]), nn.Identity)
         # init critic network parameters
         for i in range(0, len(critic), 2):
             nn.init.zeros_(critic[i].bias)
@@ -306,48 +313,129 @@ class PPOAgent:
         )
 
     def _save_checkpoint(self):
-        filename = os.path.join(self._cp_dir, f"epochs_{self._curr_epoch}.pt")
-        if os.path.exists(filename):
-            print("\x1b[1;33mWarning: Overwriting %s!\x1b[0m" % (filename))
+        if os.path.exists(self._cp_dir):
+            raise FileExistsError(f"Directory {self._cp_dir} already exists!")
+
+        cfg_path = os.path.join(self._cp_dir, f"config.pt")
+        log_path = os.path.join(self._cp_dir, f"log.csv")
+        data_path = os.path.join(self._cp_dir, f"epochs_{self._curr_epoch}.pt")
 
         pathlib.Path(self._cp_dir).mkdir(parents=True, exist_ok=True)
-        torch.save(self, filename)
 
-    def _set_dflt_cfg(self):
-        self._cfg["device"] = device
+        if not os.path.exists(cfg_path):
+            torch.save(self._cfg, cfg_path)
+        self._log.to_csv(log_path, index=False)
 
-        self._cfg.setdefault("seed", 56)
+        data = {
+            "entry_point": "ppo_agent.PPOAgent",
+            "env_name": self._env_name,
+            "curr_epoch": self._curr_epoch,
+            "vis_value_names": self._vis_value_names,
+            "env": self._env.state_dict(),
+            "actor": self._actor.state_dict(),
+            "critic": self._critic.state_dict(),
+            "opt": self._opt.state_dict(),
+            "adv_module": self._adv_module.state_dict(),
+            "loss_module": self._loss_module.state_dict(),
+        }
+        torch.save(data, data_path)
 
-        self._cfg.setdefault("epochs", 100)
-        self._cfg.setdefault("save_cp_freq", 2)
+    @classmethod
+    def from_checkpoint(cls, cp_dir, epochs, render_mode=None, **env_kwargs):
+        cfg = torch.load(os.path.join(cp_dir, "config.pt"), map_location="cpu")
+        log = pd.read_csv(os.path.join(cp_dir, "log.csv"))
+        data = torch.load(search_cp_file_name(cp_dir, epochs), map_location="cpu")
+        print(json.dumps(cfg, sort_keys=True, indent=4, default=str))
+        cfg["init_stats_param"] = data["env"]
 
-        self._cfg.setdefault("hidden_sizes", [256, 256])
-        self._cfg.setdefault("activation", nn.Tanh)
+        agent = cls(cp_dir=None, env_name=data["env_name"], **cfg)
+        agent._curr_epoch = data["curr_epoch"]
+        agent._vis_value_names = data["vis_value_names"]
+        agent._log = log[:epochs]
 
-        self._cfg.setdefault("gamma", 0.99)
-        self._cfg.setdefault("criterion", "l2")
-        self._cfg.setdefault("clip_grad_norm", 1.0)
+        if render_mode is not None:
+            # testing mode
+            cfg = agent._cfg
+            assert render_mode == "human"
+            cfg["env_kwargs"].update(env_kwargs)
+            cfg["env_kwargs"]["render_mode"] = render_mode
+            cfg["epochs"] = 10 * cfg["steps_per_epoch"]
+            cfg["steps_per_epoch"] = 1
+            if cfg["max_steps_per_traj"] < 0:
+                cfg["max_steps_per_traj"] = 1000
 
-        self._cfg.setdefault("init_stats_param", 1000)
-        self._cfg.setdefault("max_steps_per_traj", -1)
-        self._cfg.setdefault("env_kwargs", dict())
+        agent._init_all()
+        agent._update_vis()
 
-    def _set_ppo_dflt_cfg(self):
-        self._cfg.setdefault("opt_epochs", 20)
+        agent._actor.load_state_dict(data["actor"])
+        agent._critic.load_state_dict(data["critic"])
+        agent._opt.load_state_dict(data["opt"])
+        agent._adv_module.load_state_dict(data["adv_module"])
+        agent._loss_module.load_state_dict(data["loss_module"])
 
-        self._cfg.setdefault("lr_actor", 0.0004)
-        self._cfg.setdefault("lr_critic", 0.001)
+        return agent
 
-        self._cfg.setdefault("lam", 0.95)
-        self._cfg.setdefault("clip_ratio_eps", 0.2)
-        self._cfg.setdefault("entropy_coef", 0.01)
+    def _get_dflt_cfg(self):
+        cfg = dict()
+        cfg = {
+            # --- training ---
+            "device": device,
+            "seed": 56,
+            "epochs": 100,
+            "save_cp_freq": 5,
+            # --- network ---
+            "hidden_sizes": [256, 256],
+            "activation": "Tanh",
+            "gamma": 0.99,
+            "criterion": "l2",
+            "clip_grad_norm": 1.0,
+            # --- env ---
+            "init_stats_param": 1000,
+            "max_steps_per_traj": -1,
+            "steps_per_epoch": 8192,
+            "env_kwargs": {},
+            # --- PPO specific ---
+            "opt_epochs": 20,
+            "lr_actor": 0.0004,
+            "lr_critic": 0.001,
+            "lam": 0.95,
+            "clip_ratio_eps": 0.2,
+            "entropy_coef": 0.01,
+            "batch_size": 64,
+        }
+        cfg["num_batch"] = int(cfg["steps_per_epoch"] // cfg["batch_size"])
+        return cfg
 
-        self._cfg.setdefault("batch_size", 64)
-        self._cfg.setdefault("steps_per_epoch", 8192)
+    def _update_cfg(self, cfg: dict):
+        for key in cfg.keys():
+            if key not in self._cfg:
+                raise KeyError(f"Invalid key {key} in cfg")
 
-        num_batch = int(self._cfg["steps_per_epoch"] // self._cfg["batch_size"])
-        self._cfg["num_batch"] = num_batch
-        steps_per_epoch = num_batch * self._cfg["batch_size"]
-        if steps_per_epoch != self._cfg["steps_per_epoch"]:
-            print(f"Warning: `steps_per_epoch` is truncated to {steps_per_epoch}!")
-            self._cfg["steps_per_epoch"] = steps_per_epoch
+        self._cfg.update(cfg)
+        cfg = self._cfg
+
+        num_batch = int(cfg["steps_per_epoch"] // cfg["batch_size"])
+        cfg["num_batch"] = num_batch
+        steps_per_epoch = num_batch * cfg["batch_size"]
+        if steps_per_epoch != cfg["steps_per_epoch"]:
+            print(
+                f"\x1b[1;33mWarning: `steps_per_epoch` is truncated to {steps_per_epoch}!\x1b[0m"
+            )
+            cfg["steps_per_epoch"] = steps_per_epoch
+
+
+def test_agent(cp_dir, epochs, **env_kwargs):
+    agent = PPOAgent.from_checkpoint(cp_dir, epochs, "human", **env_kwargs)
+
+    for data in agent._collector:
+        if data["next"]["done"] or data["next"]["truncated"]:
+            print(
+                f"step_count: %d, traj_reward: %lf"
+                % (
+                    data["next"]["step_count"].cpu().item(),
+                    data["episode_reward"].cpu().item(),
+                )
+            )
+        if keyboard.is_pressed("Esc"):
+            break
+    plt.close(agent._fig)
