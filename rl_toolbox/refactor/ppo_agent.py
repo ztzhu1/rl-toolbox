@@ -257,6 +257,7 @@ class PPOAgent:
         )
 
     def _init_collector(self):
+        # TODO (ztzhu): use parallel collector
         cfg = self._cfg
         self._collector = SyncDataCollector(
             self._env,
@@ -313,9 +314,6 @@ class PPOAgent:
         )
 
     def _save_checkpoint(self):
-        if os.path.exists(self._cp_dir):
-            raise FileExistsError(f"Directory {self._cp_dir} already exists!")
-
         cfg_path = os.path.join(self._cp_dir, f"config.pt")
         log_path = os.path.join(self._cp_dir, f"log.csv")
         data_path = os.path.join(self._cp_dir, f"epochs_{self._curr_epoch}.pt")
