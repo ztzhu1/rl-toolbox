@@ -112,7 +112,6 @@ class DQNAgent(Agent):
     def set_default_extra_config(self):
         cfg = self.config
 
-        cfg.setdefault("epochs_critic", 80)
         cfg.setdefault("batch_size", 128)
 
         cfg.setdefault("double", False)

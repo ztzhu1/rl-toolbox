@@ -399,7 +399,7 @@ class PPOAgent:
             "lam": 0.95,
             "clip_ratio_eps": 0.2,
             "entropy_coef": 0.01,
-            "batch_size": 64,
+            "batch_size": 128,
         }
         cfg["num_batch"] = int(cfg["steps_per_epoch"] // cfg["batch_size"])
         return cfg
