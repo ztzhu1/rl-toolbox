@@ -345,7 +345,7 @@ class DQNAgent:
             "device": device,
             "seed": 56,
             "epochs": 600,
-            "save_cp_freq": 5,
+            "save_cp_freq": 20,
             # --- network ---
             "hidden_sizes": [256, 256],
             "activation": "ReLU",
