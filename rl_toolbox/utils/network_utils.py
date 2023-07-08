@@ -9,6 +9,8 @@ def mlp(sizes, activation=nn.Tanh, output_activation=nn.Identity):
     layers = []
     for i in range(0, len(sizes) - 1):
         act = activation if i < len(sizes) - 2 else output_activation
+        if isinstance(act, str):
+            act = getattr(nn, act)
         layers += [nn.Linear(sizes[i], sizes[i + 1]), act()]
     return nn.Sequential(*layers)
 
@@ -37,6 +39,16 @@ def update_target_net(net: nn.Module, target_net: nn.Module, tau=1.0):
         target_state[key] = net_state[key] * tau + target_state[key] * (1.0 - tau)
     target_net.load_state_dict(target_state)
 
+
+def soft_update(net, target_net, tau):
+    new_params = net.parameters()
+    target_sd = target_net.state_dict()
+    with torch.no_grad():
+        for k, target_p, new_p in zip(
+            target_sd.keys(), target_sd.values(), new_params
+        ):
+            target_sd[k] = target_p * (1.0 - tau) + new_p * tau
+    target_net.load_state_dict(target_sd)
 
 def freeze_grad(net: nn.Module):
     for p in net.parameters():
