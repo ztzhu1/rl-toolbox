@@ -1,199 +1,135 @@
 from abc import ABC, abstractmethod
+import os
 
 from matplotlib import pyplot as plt
-import numpy as np
 import pandas as pd
-from tqdm.auto import trange
+from tqdm.auto import tqdm
 
-import gymnasium as gym
-from gymnasium.spaces import Box, Discrete
-import torch
-from torch import nn
-import torch.nn.functional as F
-
-from rl_toolbox.utils.backend import check_notebook, get_device
-from rl_toolbox.utils.cp_utils import save_checkpoint
+from rl_toolbox.utils.backend import check_notebook
+from rl_toolbox.utils.cp_utils import load_checkpoint, save_checkopoint
 from rl_toolbox.visualization.monitor import plot_value
 
 in_notebook = check_notebook()
 if in_notebook:
     from IPython import display
 
-device = get_device()
-
 
 class Agent(ABC):
-    def __init__(self, model_dir, env=None, args_in_name=None, **config) -> None:
-        self.model_dir = model_dir
-        self.args_in_name = args_in_name
-        config["env"] = env
-        self.config = config
-        self.params_to_save = ["log", "continuous", "__class__"]
-        self.vis_value_names = None  # should be overwritten
+    def __init__(
+        self, cp_dir, env_name, save_buf, vis_value_names, saved_attr_names, **cfg
+    ) -> None:
+        self._cp_dir = cp_dir
+        self._env_name = env_name
+        self._save_buf = save_buf
+        self._cfg = self._updated_cfg(cfg)
 
-        self.overwrite_default_config()
-        self.set_default_config()
-        self.set_default_extra_config()
-        if model_dir is not None:
-            self.check_config_keys()
-            print("env: %s" % self.config["env"])
+        self._curr_epoch = 0
+        self._vis_value_names = vis_value_names
+        self._saved_attr_names = saved_attr_names
 
-    @staticmethod
-    @abstractmethod
-    def get_model(obs_space_size, action_space_size, hidden_sizes, config, data=None):
-        raise NotImplementedError()
+    def learn(self):
+        self._init_all()
 
-    def run(self):
-        self.seed(self.config["seed"])
-        self.init_env()
-        self.init_agents()
-        self.init_optimizers()
-        self.init_buf()
-        self.init_vis()
-
-        for epoch in trange(1, self.config["epochs"] + 1):
-            self.curr_epoch = epoch
+        pbar = tqdm(
+            total=self._cfg["epochs"] - self._curr_epoch, initial=self._curr_epoch
+        )
+        while self._curr_epoch < self._cfg["epochs"]:
+            self._curr_epoch += 1
 
             log = self.one_epoch()
-            self.process_log(log)
-            self.update_vis()
+            self._process_log(log)
+            self._update_vis()
 
-            if self.needs_to_save():
-                self.save_checkpoint()
+            if self._need_to_save():
+                self._save_checkpoint()
 
-    @abstractmethod
-    def one_epoch(self) -> dict:
-        raise NotImplementedError()
-
-    def seed(self, seed):
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed(seed)
-
-    def init_env(self):
-        config = self.config
-        env = config["env"]
-        if isinstance(env, str):
-            env = gym.make(
-                env,
-                max_episode_steps=config["max_steps_per_traj"],
-                render_mode=None,
-                **config["env_config"],
-            )
-        self.env = env
-
-        self.obs_space_size = env.observation_space.shape[0]
-
-        if isinstance(env.action_space, Box):
-            self.continuous = True
-            self.action_space_size = env.action_space.shape[0]
-        elif isinstance(env.action_space, Discrete):
-            self.continuous = False
-            self.action_space_size = env.action_space.n
-        else:
-            raise ValueError()
-        self.config["continuous"] = self.continuous
+            pbar.update()
 
     @abstractmethod
-    def init_agents(self):
+    def one_epoch(self):
         raise NotImplementedError()
 
-    @abstractmethod
-    def init_optimizers(self):
-        raise NotImplementedError()
-
-    @abstractmethod
-    def init_buf(self):
-        raise NotImplementedError()
-
-    def init_vis(self):
-        if self.vis_value_names is None:
-            return
-
-        n = len(self.vis_value_names)
-        fig = plt.figure(figsize=[5.5 * n, 4])
-        self.fig = fig
-        self.axes = dict()
-        for i, name in enumerate(self.vis_value_names):
-            self.axes[name] = fig.add_subplot(1, n, i + 1)
-        self.display_handle = None
-        if in_notebook:
-            self.display_handle = display.display(fig, display_id=True)
-
-    def update_vis(self):
-        if self.vis_value_names is None:
-            return
-
-        for name in self.vis_value_names:
-            plot_value(
-                self.axes[name],
-                self.curr_epoch,
-                self.log[self.log[name].notna()][name].to_numpy(),
-                name,
-                self.display_handle,
-            )
-
-    def process_log(self, log: dict):
-        # lazy init
-        if not hasattr(self, "log"):
-            self.log = pd.DataFrame(columns=log.keys())
-
-        self.log = self.log.append(log, ignore_index=True)
-
-    def save_checkpoint(self):
-        names = self.params_to_save
-        params_to_save = {name: getattr(self, name) for name in names}
-        save_checkpoint(
-            self.model_dir,
-            self.curr_epoch,
-            self.config,
-            self.args_in_name,
-            **params_to_save,
+    @classmethod
+    def from_checkpoint(
+        cls, cp_dir, epochs, render_mode=None, human_render_hook=None, **env_kwargs
+    ):
+        return load_checkpoint(
+            cls, cp_dir, epochs, render_mode, human_render_hook, **env_kwargs
         )
 
-    def needs_to_save(self):
-        save_model_freq = self.config["save_model_freq"]
-        return save_model_freq is not None and self.curr_epoch % save_model_freq == 0
+    @abstractmethod
+    def _init_all(self):
+        raise NotImplementedError()
 
-    def set_default_env(self):
-        config = self.config
-        if config["env"] is None:
-            config["env"] = "LunarLander-v2"
-        env = config["env"]
-        if isinstance(env, str):
-            if env == "LunarLander-v2":
-                config.setdefault("env_config", {"enable_wind": False})
-        else:
-            config.setdefault("env_config", {})
+    def _init_vis(self):
+        if self._vis_value_names is None:
+            return
 
-    def overwrite_default_config(self):
-        pass
+        n = len(self._vis_value_names)
+        if hasattr(self, "_fig"):
+            plt.close(self._fig)
+        fig = plt.figure(figsize=[5.5 * n, 4])
+        self._fig = fig
+        self._axes = dict()
+        for i, name in enumerate(self._vis_value_names):
+            self._axes[name] = fig.add_subplot(1, n, i + 1)
+        self._display_handle = None
+        if in_notebook:
+            self._display_handle = display.display(fig, display_id=True)
 
-    def set_default_config(self):
-        cfg = self.config
+    def _update_vis(self):
+        if self._vis_value_names is None:
+            return
+        if self._log is None:
+            return
 
-        cfg.setdefault("seed", 56)
+        for name in self._vis_value_names:
+            plot_value(
+                self._axes[name],
+                self._curr_epoch,
+                self._log[self._log[name].notna()][name].to_numpy(),
+                name,
+                self._display_handle,
+            )
 
-        cfg.setdefault("epochs", 600)
-        cfg.setdefault("save_model_freq", 50)
+    def _process_log(self, log: dict):
+        # lazy init
+        if not hasattr(self, "_log"):
+            self._log = pd.DataFrame(columns=log.keys())
 
-        self.set_default_env()
+        self._log = self._log.append(log, ignore_index=True)
 
-        cfg.setdefault("hidden_sizes", [128, 128])
-        cfg.setdefault("activation", nn.ReLU)
+    def _need_to_save(self):
+        save_cp_freq = self._cfg["save_cp_freq"]
+        return (
+            self._cp_dir is not None
+            and save_cp_freq is not None
+            and self._curr_epoch % save_cp_freq == 0
+        )
 
-        cfg.setdefault("max_steps_per_traj", 1000)
+    def _save_checkpoint(self):
+        save_checkopoint(self, ["_" + name for name in self._saved_attr_names])
 
-        cfg.setdefault("gamma", 0.99)
-        cfg.setdefault("criterion", F.mse_loss)
-        cfg.setdefault("clip_grad_value", None)
+    def _updated_cfg(self, cfg: dict):
+        dflt_cfg = self._get_dflt_cfg()
+        for key in cfg.keys():
+            if key not in dflt_cfg:
+                raise KeyError(f"Invalid key {key} in cfg")
 
-    def set_default_extra_config(self):
-        pass
+        dflt_cfg.update(cfg)
+        cfg = dflt_cfg
 
-    def check_config_keys(self):
-        subclass = getattr(self, "__class__")
-        valid_keys = list(subclass(None).config.keys())
-        for key in self.config.keys():
-            if key not in valid_keys:
-                raise KeyError(f"`{key}` is an invalid key!")
+        num_batch = int(cfg["steps_per_epoch"] // cfg["batch_size"])
+        cfg["num_batch"] = num_batch
+        steps_per_epoch = num_batch * cfg["batch_size"]
+        if steps_per_epoch != cfg["steps_per_epoch"]:
+            print(
+                f"\x1b[1;33mWarning: `steps_per_epoch` is truncated to {steps_per_epoch}!\x1b[0m"
+            )
+            cfg["steps_per_epoch"] = steps_per_epoch
+        if cfg["steps_per_epoch"] < cfg["batch_size"]:
+            raise ValueError(
+                "`steps_per_epoch` (%d) < `batch_size` (%d)!"
+                % (cfg["steps_per_epoch"], cfg["batch_size"])
+            )
+        return cfg
