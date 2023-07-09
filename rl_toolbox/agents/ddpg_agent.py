@@ -34,7 +34,7 @@ class DDPGAgent(Agent):
     """
 
     def __init__(
-        self, cp_dir=None, env_name="Pendulum-v1", save_buf=False, **cfg
+        self, env_name="Pendulum-v1", cp_dir=None, save_buf=False, **cfg
     ) -> None:
         vis_value_names = [
             "loss_actor",
@@ -55,7 +55,7 @@ class DDPGAgent(Agent):
             "opt_critic",
         ]
         super().__init__(
-            cp_dir, env_name, save_buf, vis_value_names, saved_attr_names, **cfg
+            env_name, cp_dir, save_buf, vis_value_names, saved_attr_names, **cfg
         )
 
     def one_epoch(self):
@@ -135,6 +135,16 @@ class DDPGAgent(Agent):
         num_trajs = np.max([num_trajs, 1])
         log["avg_frame"] = cfg["steps_per_epoch"] / num_trajs
         return log
+
+    @classmethod
+    def from_checkpoint(cls, cp_dir, epochs, render_mode=None, **env_kwargs):
+        def human_render_hook(cfg):
+            # Disable noise
+            cfg["noise_scale"] = 0.0
+
+        return super().from_checkpoint(
+            cp_dir, epochs, render_mode, human_render_hook, **env_kwargs
+        )
 
     def _init_all(self):
         self._init_env()

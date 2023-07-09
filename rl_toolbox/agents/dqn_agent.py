@@ -37,7 +37,7 @@ class DQNAgent(Agent):
     """
 
     def __init__(
-        self, cp_dir=None, env_name="MountainCar-v0", save_buf=False, **cfg
+        self, env_name="MountainCar-v0", cp_dir=None, save_buf=False, **cfg
     ) -> None:
         vis_value_names = [
             "loss",
@@ -53,7 +53,7 @@ class DQNAgent(Agent):
             "opt",
         ]
         super().__init__(
-            cp_dir, env_name, save_buf, vis_value_names, saved_attr_names, **cfg
+            env_name, cp_dir, save_buf, vis_value_names, saved_attr_names, **cfg
         )
 
     def one_epoch(self):

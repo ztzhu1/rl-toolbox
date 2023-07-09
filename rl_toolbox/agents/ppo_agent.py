@@ -38,7 +38,7 @@ class PPOAgent(Agent):
     - https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/
     """
 
-    def __init__(self, cp_dir=None, env_name="LunarLander-v2", **cfg) -> None:
+    def __init__(self, env_name="LunarLander-v2", cp_dir=None, **cfg) -> None:
         vis_value_names = [
             "loss",
             "episode_reward",
@@ -56,7 +56,7 @@ class PPOAgent(Agent):
             "loss_module",
         ]
         super().__init__(
-            cp_dir, env_name, False, vis_value_names, saved_attr_names, **cfg
+            env_name, cp_dir, False, vis_value_names, saved_attr_names, **cfg
         )
 
     def one_epoch(self):

@@ -16,8 +16,10 @@ if in_notebook:
 
 class Agent(ABC):
     def __init__(
-        self, cp_dir, env_name, save_buf, vis_value_names, saved_attr_names, **cfg
+        self, env_name, cp_dir, save_buf, vis_value_names, saved_attr_names, **cfg
     ) -> None:
+        if cp_dir is not None and os.path.exists(cp_dir):
+            raise FileExistsError(f"Directory {cp_dir} already exists!")
         self._cp_dir = cp_dir
         self._env_name = env_name
         self._save_buf = save_buf
