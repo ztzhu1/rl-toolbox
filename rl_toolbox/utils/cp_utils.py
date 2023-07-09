@@ -1,3 +1,4 @@
+from importlib import import_module
 import inspect
 import json
 import os
@@ -10,8 +11,6 @@ import numpy as np
 import pandas as pd
 
 import torch
-
-from importlib import import_module
 
 
 def search_cp_file_name(cp_dir, epochs=None):
@@ -73,7 +72,8 @@ def load_checkpoint(
     log = pd.read_csv(os.path.join(cp_dir, "log.csv"))
     data = torch.load(search_cp_file_name(cp_dir, epochs), map_location="cpu")
     print(json.dumps(cfg, sort_keys=True, indent=4, default=str))
-    cfg["init_stats_param"] = data["_env-state_dict"]
+    if cfg["init_stats_param"] is not None:
+        cfg["init_stats_param"] = data["_env-state_dict"]
 
     agent = class_(cp_dir=None, env_name=data["_env_name"], **cfg)
     agent._curr_epoch = data["_curr_epoch"]

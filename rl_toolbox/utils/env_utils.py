@@ -20,13 +20,20 @@ def make_env(
     **env_cfg
 ):
     env = GymEnv(env_name, frame_skip=1, **env_cfg)
-    env = TransformedEnv(
-        env,
-        Compose(
+    if init_stats_param is not None:
+        compose = Compose(
             ObservationNorm(in_keys=["observation"], standard_normal=True),
             RewardSum(),
             StepCounter(),
-        ),
+        )
+    else:
+        compose = Compose(
+            RewardSum(),
+            StepCounter(),
+        )
+    env = TransformedEnv(
+        env,
+        compose,
         device=device,
     )
 
