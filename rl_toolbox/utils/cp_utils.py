@@ -39,8 +39,6 @@ def search_cp_file_name(cp_dir, epochs=None):
 
 def save_checkopoint(agent, saved_attr_names):
     cp_dir = agent._cp_dir
-    if os.path.exists(cp_dir):
-        raise FileExistsError(f"Directory {cp_dir} already exists!")
     cfg_path = os.path.join(cp_dir, f"config.pt")
     log_path = os.path.join(cp_dir, f"log.csv")
     data_path = os.path.join(cp_dir, f"epochs_{agent._curr_epoch}.pt")
