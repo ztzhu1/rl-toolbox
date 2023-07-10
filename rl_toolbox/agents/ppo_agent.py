@@ -100,7 +100,12 @@ class PPOAgent(Agent):
         log = dict()
         log["loss"] = np.mean(losses)
         log["episode_reward"] = (
-            data.get(("next", "episode_reward"))[-1].detach().cpu().item()
+            data["next"]["episode_reward"]
+            .masked_select(data["next"]["done"])
+            .mean()
+            .detach()
+            .cpu()
+            .item()
         )
         log["kl_div"] = kl_div
         num_trajs = len(torch.where(data["step_count"] == 0)[0])
