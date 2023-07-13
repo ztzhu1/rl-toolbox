@@ -6,6 +6,7 @@ from torchrl.envs import (
     ObservationNorm,
     RewardSum,
     StepCounter,
+    InitTracker,
     TransformedEnv,
 )
 from torchrl.envs.libs.gym import GymEnv
@@ -25,11 +26,13 @@ def make_env(
             ObservationNorm(in_keys=["observation"], standard_normal=True),
             RewardSum(),
             StepCounter(),
+            InitTracker(),
         )
     else:
         compose = Compose(
             RewardSum(),
             StepCounter(),
+            InitTracker(),
         )
     env = TransformedEnv(
         env,
