@@ -1,6 +1,6 @@
 import numpy as np
 
-from tensordict.nn import TensorDictModule
+from tensordict.nn import TensorDictModule, TensorDictSequential
 from tensordict.nn.distributions import NormalParamExtractor
 import torch
 from torch import nn
@@ -9,6 +9,7 @@ from torch.optim import Adam
 from torchrl.collectors import SyncDataCollector
 from torchrl.data.tensor_specs import ContinuousBox, DiscreteBox
 from torchrl.modules import (
+    LSTMModule,
     OneHotCategorical,
     ProbabilisticActor,
     TanhNormal,
@@ -141,6 +142,7 @@ class PPOAgent(Agent):
 
     def _init_actor(self):
         cfg = self._cfg
+        lstm_hs = cfg["lstm_hidden_size"]
 
         if self._cont_act:
             out_dim_factor = 2
@@ -153,7 +155,7 @@ class PPOAgent(Agent):
 
         obs_dim = self._env.observation_spec["observation"].shape[0]
         act_dim = self._env.action_spec.shape[0]
-        sizes = [obs_dim] + cfg["hidden_sizes"] + [out_dim_factor * act_dim]
+        sizes = [lstm_hs or obs_dim] + cfg["hidden_sizes"] + [out_dim_factor * act_dim]
 
         actor = mlp(sizes, getattr(nn, cfg["activation"]), out_layer)
         # init actor network parameters
@@ -164,9 +166,21 @@ class PPOAgent(Agent):
             else:
                 nn.init.orthogonal_(actor[i].weight, 0.01)
         # make actor a TensorDictModule
-        actor = TensorDictModule(
-            actor, in_keys=["observation"], out_keys=actor_out_keys
-        )
+        if lstm_hs is None:
+            actor = TensorDictModule(
+                actor, in_keys=["observation"], out_keys=actor_out_keys
+            )
+        else:
+            lstm_module = LSTMModule(
+                obs_dim,
+                lstm_hs,
+                in_keys=["observation", "rs_h", "rs_c"],
+                out_keys=["intermediate", ("next", "rs_h"), ("next", "rs_c")],
+            )
+            actor = TensorDictModule(
+                actor, in_keys=["intermediate"], out_keys=actor_out_keys
+            )
+            actor = TensorDictSequential(lstm_module, actor)
         if self._cont_act:
             act_min = self._env.action_spec.space.minimum
             act_max = self._env.action_spec.space.maximum
@@ -270,6 +284,7 @@ class PPOAgent(Agent):
             "steps_per_epoch": 8192,
             "env_kwargs": {},
             # --- PPO specific ---
+            "lstm_hidden_size": None,
             "opt_epochs": 20,
             "batch_size": 128,
             "lr_actor": 0.0004,
